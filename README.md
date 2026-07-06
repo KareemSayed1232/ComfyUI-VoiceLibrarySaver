@@ -27,12 +27,12 @@ Feed it audio from a **LoadAudio** node and the transcript from the suite's
 ## Install
 
 **ComfyUI-Manager:** *Install via Git URL* →
-`https://github.com/OWNER/ComfyUI-VoiceLibrarySaver`
+`https://github.com/KareemSayed1232/ComfyUI-VoiceLibrarySaver`
 
 **Manual:**
 ```
 cd ComfyUI/custom_nodes
-git clone https://github.com/OWNER/ComfyUI-VoiceLibrarySaver
+git clone https://github.com/KareemSayed1232/ComfyUI-VoiceLibrarySaver
 ```
 Restart ComfyUI. No extra dependencies (uses torch/torchaudio, already required by
 ComfyUI).

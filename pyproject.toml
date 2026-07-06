@@ -6,9 +6,9 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/OWNER/ComfyUI-VoiceLibrarySaver"
+Repository = "https://github.com/KareemSayed1232/ComfyUI-VoiceLibrarySaver"
 
 [tool.comfy]
-PublisherId = "OWNER"
+PublisherId = "KareemSayed1232"
 DisplayName = "ComfyUI-VoiceLibrarySaver"
 Icon = ""
