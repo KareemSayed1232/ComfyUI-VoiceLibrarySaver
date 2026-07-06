@@ -1,0 +1,14 @@
+[project]
+name = "comfyui-voicelibrarysaver"
+description = "A tiny node for TTS-Audio-Suite that saves an AUDIO clip + transcript into models/voices as a named voice, so [CharacterName] tags resolve to it. Build a multi-voice library entirely inside ComfyUI."
+version = "1.0.0"
+license = { text = "MIT" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/OWNER/ComfyUI-VoiceLibrarySaver"
+
+[tool.comfy]
+PublisherId = "OWNER"
+DisplayName = "ComfyUI-VoiceLibrarySaver"
+Icon = ""
