@@ -117,6 +117,26 @@ def _dropdown(names):
     return names or ["(none found)"]
 
 
+# Languages the suite's Qwen3 ASR accepts, plus "Auto" for auto-detect.
+LANGUAGES = ["Auto", "English", "Arabic", "Chinese", "Cantonese", "German", "French",
+             "Spanish", "Portuguese", "Indonesian", "Italian", "Korean", "Russian",
+             "Thai", "Vietnamese", "Japanese", "Turkish", "Hindi", "Malay", "Dutch",
+             "Swedish", "Danish", "Finnish", "Polish", "Czech", "Filipino", "Persian",
+             "Greek", "Romanian", "Hungarian", "Macedonian"]
+
+ROOT_LABEL = "(root)"
+
+
+def _list_subfolders(directory):
+    """'(root)' plus every real subfolder of models/voices — for a save-location dropdown."""
+    subs = [ROOT_LABEL]
+    if os.path.isdir(directory):
+        for f in sorted(os.listdir(directory), key=str.lower):
+            if os.path.isdir(os.path.join(directory, f)) and not f.startswith("."):
+                subs.append(f)
+    return subs
+
+
 class VoiceLibrarySaver:
     """Transcribe an AUDIO clip with the suite's ASR and save it as a named voice."""
 
@@ -141,19 +161,18 @@ class VoiceLibrarySaver:
                 }),
             },
             "optional": {
-                "language": ("STRING", {
+                "language": (LANGUAGES, {
                     "default": "Auto",
-                    "tooltip": "Spoken language for the ASR ('Auto' to detect). Passed straight "
-                               "to the suite's ASR node."
+                    "tooltip": "Spoken language for the ASR ('Auto' to detect). Pick from the list."
                 }),
                 "overwrite": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "True = always re-transcribe and rewrite the files. "
                                "False = skip if the voice already exists (fast)."
                 }),
-                "subfolder": ("STRING", {
-                    "default": "",
-                    "tooltip": "Optional subfolder inside models/voices (leave empty for root)."
+                "subfolder": (_list_subfolders(_voices_root()), {
+                    "default": ROOT_LABEL,
+                    "tooltip": "Where to save inside models/voices. '(root)' = the top folder."
                 }),
             },
         }
@@ -258,6 +277,9 @@ class VoiceLibrarySaver:
         # Resolve a lazy audio callable (some older VHS nodes) once, up front.
         if callable(audio):
             audio = audio()
+
+        if subfolder in (ROOT_LABEL, None):
+            subfolder = ""
 
         name = self._sanitize(voice_name)
         out_dir = self._voices_dir(subfolder)
