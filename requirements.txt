@@ -1,3 +1,0 @@
-# Create Voice Character needs ONE Whisper backend for the built-in ASR.
-# faster-whisper is recommended (fast, low VRAM). openai-whisper also works.
-faster-whisper>=1.0.0

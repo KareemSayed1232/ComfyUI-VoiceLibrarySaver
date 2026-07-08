@@ -5,84 +5,53 @@ ONE simple node for the TTS-Audio-Suite (diodiogod) workflow:
 
     🎙️  Create Voice Character
 
-Give it an audio clip and a name. It transcribes the clip itself (built-in
-Whisper ASR) and writes the exact files the suite needs to turn that clip into a
-usable [CharacterName]:
+Give it an audio clip, an ASR engine you already have loaded, and a name. It
+transcribes the clip using **TTS-Audio-Suite's own ASR** (so NO new model is
+downloaded — it reuses whatever ASR model your engine already provides) and
+writes the files the suite needs to turn that clip into a usable [CharacterName]:
 
     ComfyUI/models/voices/<name>.wav              (the reference clip)
     ComfyUI/models/voices/<name>.reference.txt    (spoken transcript, used for cloning)
     ComfyUI/models/voices/<name>.txt              (same text, metadata slot)
 
 After it runs, type [<name>] in the 🎤 TTS Text node and press R to refresh the
-voice cache. No external ASR node, no hand-typed transcripts, no file copying.
+voice cache. No separate ASR Transcribe node, no hand-typed transcripts.
+
+Wiring
+------
+    LoadAudio ─────────────► audio
+    <your ASR-capable        │
+     TTS engine> ──────────► tts_engine   🎙️ Create Voice Character
+                                            (any engine the suite's ASR accepts,
+                                             e.g. the Qwen3-TTS Engine or a
+                                             Granite ASR Engine — the model you
+                                             already downloaded)
 
 Install / update
 ----------------
 Put this folder in  ComfyUI/custom_nodes/ComfyUI-VoiceLibrarySaver  (or `git pull`)
-and restart ComfyUI.
-
-Requires ONE Whisper backend (either works, the node auto-detects):
-    pip install faster-whisper      (recommended: fast, low VRAM)
-    pip install openai-whisper      (alternative)
+and restart ComfyUI. No extra dependencies — it uses torch/torchaudio (already
+required by ComfyUI) and calls TTS-Audio-Suite's ASR that you already have.
 """
 
 import os
 import folder_paths
 
-# Whisper model sizes offered on the node. Both backends accept these names.
-WHISPER_MODELS = ["base", "small", "medium", "large-v3", "tiny"]
 
-# A short language menu; "auto" lets Whisper detect it.
-LANGUAGES = ["auto", "en", "ar", "es", "fr", "de", "it", "pt",
-             "ru", "zh", "ja", "ko", "hi", "tr", "nl", "pl"]
+def _find_suite_asr_class():
+    """Locate TTS-Audio-Suite's UnifiedASRTranscribeNode via ComfyUI's registry.
 
-# Loaded ASR models are cached so repeated runs don't reload from disk.
-_ASR_CACHE = {}
-
-
-def _torch_is_cuda():
-    import torch
-    return torch.cuda.is_available()
-
-
-def _asr_faster_whisper(audio_np, model_size, language):
-    """Transcribe a 16 kHz mono float32 numpy array with faster-whisper."""
-    from faster_whisper import WhisperModel
-
-    device = "cuda" if _torch_is_cuda() else "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
-    key = ("faster-whisper", model_size, device, compute_type)
-
-    model = _ASR_CACHE.get(key)
-    if model is None:
-        model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        _ASR_CACHE[key] = model
-
-    lang = None if language == "auto" else language
-    segments, info = model.transcribe(audio_np, language=lang, beam_size=5)
-    text = "".join(seg.text for seg in segments).strip()
-    return text, getattr(info, "language", language)
-
-
-def _asr_openai_whisper(audio_np, model_size, language):
-    """Transcribe a 16 kHz mono float32 numpy array with openai-whisper."""
-    import whisper
-
-    device = "cuda" if _torch_is_cuda() else "cpu"
-    key = ("openai-whisper", model_size, device)
-
-    model = _ASR_CACHE.get(key)
-    if model is None:
-        model = whisper.load_model(model_size, device=device)
-        _ASR_CACHE[key] = model
-
-    lang = None if language == "auto" else language
-    result = model.transcribe(audio_np, language=lang, fp16=(device == "cuda"))
-    return result["text"].strip(), result.get("language", language)
+    Looked up at runtime (not import time) because the suite may load after us.
+    """
+    import nodes  # ComfyUI's global node registry
+    for cls in nodes.NODE_CLASS_MAPPINGS.values():
+        if getattr(cls, "__name__", "") == "UnifiedASRTranscribeNode":
+            return cls
+    return None
 
 
 class VoiceLibrarySaver:
-    """Transcribe an AUDIO clip and save it (+ transcript) as a named voice."""
+    """Transcribe an AUDIO clip with the suite's ASR and save it as a named voice."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -93,6 +62,11 @@ class VoiceLibrarySaver:
                                "'audio' output of a VHS Load Video node). 5-20s of clean "
                                "speech works best."
                 }),
+                "tts_engine": ("TTS_ENGINE", {
+                    "tooltip": "An ASR-capable TTS-Audio-Suite engine you ALREADY have loaded "
+                               "(e.g. the Qwen3-TTS Engine, or a Granite ASR Engine). Its model "
+                               "does the transcription, so nothing new is downloaded."
+                }),
                 "voice_name": ("STRING", {
                     "default": "MyVoice1",
                     "tooltip": "The character name. Becomes the file name AND the [tag] you "
@@ -100,14 +74,10 @@ class VoiceLibrarySaver:
                 }),
             },
             "optional": {
-                "whisper_model": (WHISPER_MODELS, {
-                    "default": "base",
-                    "tooltip": "ASR model size. 'base' is a good balance; go bigger for "
-                               "more accuracy, smaller for speed. Downloaded once, then cached."
-                }),
-                "language": (LANGUAGES, {
-                    "default": "auto",
-                    "tooltip": "Spoken language of the clip. 'auto' lets Whisper detect it."
+                "language": ("STRING", {
+                    "default": "Auto",
+                    "tooltip": "Spoken language for the ASR ('Auto' to detect). Passed straight "
+                               "to the suite's ASR node."
                 }),
                 "overwrite": ("BOOLEAN", {
                     "default": True,
@@ -147,9 +117,6 @@ class VoiceLibrarySaver:
         import torch
         import numpy as np
 
-        if callable(audio):          # some older VHS nodes hand back a lazy callable
-            audio = audio()
-
         waveform, sample_rate = None, 24000
         if isinstance(audio, dict) and "waveform" in audio:
             waveform = audio["waveform"]
@@ -170,38 +137,42 @@ class VoiceLibrarySaver:
             waveform = waveform.unsqueeze(0)
         return waveform.detach().cpu().to(torch.float32), int(sample_rate)
 
-    @staticmethod
-    def _to_mono_16k_np(waveform, sample_rate):
-        """Whisper wants a 16 kHz mono float32 numpy array."""
-        import torchaudio
-        wf = waveform
-        if wf.dim() == 2 and wf.shape[0] > 1:       # downmix to mono
-            wf = wf.mean(dim=0, keepdim=True)
-        if sample_rate != 16000:
-            wf = torchaudio.functional.resample(wf, sample_rate, 16000)
-        return wf.squeeze(0).contiguous().cpu().numpy().astype("float32")
-
-    def _transcribe(self, audio_np, model_size, language):
-        """Try faster-whisper, then openai-whisper. Raise a clear error if neither is present."""
-        import_errors = []
-        for backend in (_asr_faster_whisper, _asr_openai_whisper):
-            try:
-                return backend(audio_np, model_size, language)
-            except ImportError as e:
-                import_errors.append(str(e))
-                continue
-        raise RuntimeError(
-            "Create Voice Character needs a Whisper backend, but none is installed.\n"
-            "Install ONE of these in your ComfyUI python environment:\n"
-            "    pip install faster-whisper     (recommended)\n"
-            "    pip install openai-whisper\n"
-            f"(import errors: {' | '.join(import_errors)})"
+    def _transcribe_with_suite(self, tts_engine, audio, language):
+        """Call TTS-Audio-Suite's ASR node in-process and return the text."""
+        asr_cls = _find_suite_asr_class()
+        if asr_cls is None:
+            raise RuntimeError(
+                "Create Voice Character could not find TTS-Audio-Suite's ASR node "
+                "(UnifiedASRTranscribeNode). Make sure TTS-Audio-Suite is installed and "
+                "loaded, then restart ComfyUI."
+            )
+        inst = asr_cls()
+        func = getattr(inst, getattr(asr_cls, "FUNCTION", "transcribe"))
+        # Mirror the suite ASR node's defaults; only language is exposed on our node.
+        result = func(
+            engine=tts_engine,
+            audio=audio,
+            language=(language or "Auto"),
+            task="transcribe",
+            timestamps="none",
+            diarization=False,
+            chunk_size=30,
+            overlap=2,
+            enable_asr_cache=True,
         )
+        # transcribe() returns (text, asr_timing_data, info)
+        if isinstance(result, (tuple, list)) and result:
+            return (result[0] or "").strip()
+        return (result or "").strip()
 
     # ---- main --------------------------------------------------------------
-    def create_voice(self, audio, voice_name, whisper_model="base",
-                     language="auto", overwrite=True, subfolder=""):
+    def create_voice(self, audio, tts_engine, voice_name,
+                     language="Auto", overwrite=True, subfolder=""):
         import torchaudio
+
+        # Resolve a lazy audio callable (some older VHS nodes) once, up front.
+        if callable(audio):
+            audio = audio()
 
         name = self._sanitize(voice_name)
         out_dir = self._voices_dir(subfolder)
@@ -222,14 +193,12 @@ class VoiceLibrarySaver:
                         f"[TEXT] {existing[:400]}" if existing else "[TEXT] (existing transcript)"]
             return {"ui": {"text": ui_lines}, "result": (name, existing, wav_path)}
 
-        waveform, sample_rate = self._to_waveform_sr(audio)
-
         # 1) save the reference clip at its native sample rate
+        waveform, sample_rate = self._to_waveform_sr(audio)
         torchaudio.save(wav_path, waveform, sample_rate)
 
-        # 2) transcribe a 16 kHz mono copy in memory
-        audio_np = self._to_mono_16k_np(waveform, sample_rate)
-        text, detected_lang = self._transcribe(audio_np, whisper_model, language)
+        # 2) transcribe with the suite's own ASR (no new model download)
+        text = self._transcribe_with_suite(tts_engine, audio, language)
 
         # 3) write the transcript files that mark this .wav as a usable character
         with open(ref_path, "w", encoding="utf-8") as f:
@@ -238,15 +207,14 @@ class VoiceLibrarySaver:
             f.write(text)
 
         print(f"[Create Voice Character] saved voice '{name}' -> {wav_path}")
-        print(f"[Create Voice Character] transcript ({detected_lang}): {text or '(empty!)'}")
+        print(f"[Create Voice Character] transcript: {text or '(empty!)'}")
         if not text:
             print("[Create Voice Character] WARNING: ASR returned empty text. "
-                  "Is the clip silent, or the wrong language selected?")
+                  "Is the clip silent, or is the engine ASR-capable?")
 
         preview = text if len(text) <= 400 else text[:400] + " …"
         ui_lines = [f"[OK] {name}  (saved)",
-                    f"[LANG] {detected_lang}",
-                    f"[TEXT] {preview}" if preview else "[TEXT] (empty - check the clip)"]
+                    f"[TEXT] {preview}" if preview else "[TEXT] (empty - check clip/engine)"]
         return {"ui": {"text": ui_lines}, "result": (name, text, wav_path)}
 
 

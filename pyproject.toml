@@ -1,9 +1,9 @@
 [project]
 name = "comfyui-voicelibrarysaver"
-description = "One node for TTS-Audio-Suite: give it an audio clip + a name and it transcribes the clip (built-in Whisper ASR) and saves the .wav + transcript into models/voices, so a [CharacterName] tag resolves to it. Create voice characters entirely inside ComfyUI."
+description = "One node for TTS-Audio-Suite: give it an audio clip, an ASR engine you already have, and a name; it transcribes the clip with the suite's own ASR (no new model) and saves the .wav + transcript into models/voices, so a [CharacterName] tag resolves to it. Create voice characters entirely inside ComfyUI."
 version = "2.0.0"
 license = { text = "MIT" }
-dependencies = ["faster-whisper>=1.0.0"]
+dependencies = []
 
 [project.urls]
 Repository = "https://github.com/KareemSayed1232/ComfyUI-VoiceLibrarySaver"
