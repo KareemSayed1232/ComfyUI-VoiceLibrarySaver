@@ -50,6 +50,73 @@ def _find_suite_asr_class():
     return None
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers for the voice-library management nodes
+# ---------------------------------------------------------------------------
+AUDIO_EXTS = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".opus", ".aac")
+PURGE_ALL = "⚠️ ALL (empty trash)"
+
+
+def _voices_root():
+    return os.path.join(folder_paths.models_dir, "voices")
+
+
+def _trash_root():
+    # A sibling of models/voices, NOT inside it, so the suite never lists
+    # deleted voices as usable characters.
+    return os.path.join(folder_paths.models_dir, "voice_trash")
+
+
+def _sanitize_name(name):
+    cleaned = "".join(c for c in (name or "").strip() if c not in '\\/:*?"<>|')
+    return cleaned.strip() or "Voice"
+
+
+def _list_voice_names(directory):
+    """Base names of every voice (audio file) in a directory, sorted."""
+    names = set()
+    if os.path.isdir(directory):
+        for f in os.listdir(directory):
+            stem, ext = os.path.splitext(f)
+            if ext.lower() in AUDIO_EXTS:
+                names.add(stem)
+    return sorted(names, key=str.lower)
+
+
+def _companion_files(directory, base):
+    """Every file that belongs to a voice: <base>.wav, <base>.reference.txt, etc."""
+    out = []
+    if os.path.isdir(directory):
+        prefix = base + "."
+        for f in os.listdir(directory):
+            if f.startswith(prefix):
+                out.append(f)
+    return out
+
+
+def _move_voice(src_dir, dst_dir, base, overwrite=True):
+    """Move all files of a voice from one dir to another. Returns moved filenames."""
+    import shutil
+    os.makedirs(dst_dir, exist_ok=True)
+    moved = []
+    for f in _companion_files(src_dir, base):
+        src = os.path.join(src_dir, f)
+        dst = os.path.join(dst_dir, f)
+        if os.path.exists(dst):
+            if overwrite:
+                os.remove(dst)
+            else:
+                continue
+        shutil.move(src, dst)
+        moved.append(f)
+    return moved
+
+
+def _dropdown(names):
+    """ComfyUI combos must be non-empty; give a clear placeholder when empty."""
+    return names or ["(none found)"]
+
+
 class VoiceLibrarySaver:
     """Transcribe an AUDIO clip with the suite's ASR and save it as a named voice."""
 
@@ -236,11 +303,185 @@ class VoiceLibrarySaver:
         return {"ui": {"text": ui_lines}, "result": (name, text, wav_path)}
 
 
+class VoiceLibraryDelete:
+    """Soft-delete a voice: move it to the trash folder (restorable later)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "voice": (_dropdown(_list_voice_names(_voices_root())), {
+                    "tooltip": "The voice to delete. Its files are MOVED to models/voice_trash "
+                               "so you can restore them; they no longer resolve as [tags]."
+                }),
+                "confirm": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Safety switch. Must be ON to actually delete."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("signal",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, voice, confirm):
+        if voice in ("(none found)", "") or voice is None:
+            return {"ui": {"text": ["[SKIP] no voice selected"]}, "result": (voice or "",)}
+        if not confirm:
+            print(f"[Voice Delete] '{voice}' NOT deleted (confirm is OFF).")
+            return {"ui": {"text": [f"[SKIP] {voice}", "Turn 'confirm' ON to delete."]},
+                    "result": (voice,)}
+        moved = _move_voice(_voices_root(), _trash_root(), voice, overwrite=True)
+        print(f"[Voice Delete] moved '{voice}' to trash: {moved}")
+        return {"ui": {"text": [f"[DELETED] {voice} -> trash", f"{len(moved)} file(s)"]},
+                "result": (voice,)}
+
+
+class VoiceLibraryRestore:
+    """Restore a previously deleted voice from the trash back into models/voices."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "voice": (_dropdown(_list_voice_names(_trash_root())), {
+                    "tooltip": "A voice sitting in the trash. It is MOVED back to models/voices "
+                               "and becomes a usable [tag] again."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("signal",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, voice):
+        if voice in ("(none found)", "") or voice is None:
+            return {"ui": {"text": ["[SKIP] nothing in trash"]}, "result": (voice or "",)}
+        moved = _move_voice(_trash_root(), _voices_root(), voice, overwrite=True)
+        print(f"[Voice Restore] restored '{voice}' from trash: {moved}")
+        return {"ui": {"text": [f"[RESTORED] {voice}", f"{len(moved)} file(s)"]},
+                "result": (voice,)}
+
+
+class VoiceLibraryPurge:
+    """Permanently delete voices from the trash. This cannot be undone."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "voice": (_dropdown([PURGE_ALL] + _list_voice_names(_trash_root())), {
+                    "tooltip": "A voice in the trash to erase forever, or ALL to empty the trash."
+                }),
+                "confirm": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Safety switch. Must be ON. Permanent — there is no undo."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("signal",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, voice, confirm):
+        if not confirm:
+            print(f"[Voice Purge] '{voice}' NOT purged (confirm is OFF).")
+            return {"ui": {"text": [f"[SKIP] {voice}", "Turn 'confirm' ON to purge."]},
+                    "result": (voice,)}
+        trash = _trash_root()
+        targets = _list_voice_names(trash) if voice == PURGE_ALL else [voice]
+        removed = 0
+        for base in targets:
+            for f in _companion_files(trash, base):
+                try:
+                    os.remove(os.path.join(trash, f))
+                    removed += 1
+                except OSError:
+                    pass
+        print(f"[Voice Purge] permanently removed {removed} file(s) for {targets}")
+        return {"ui": {"text": [f"[PURGED] {voice}", f"{removed} file(s) erased"]},
+                "result": (voice,)}
+
+
+class VoiceLibraryRename:
+    """Rename a voice (and its transcript files) in models/voices."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "voice": (_dropdown(_list_voice_names(_voices_root())), {
+                    "tooltip": "The voice to rename."
+                }),
+                "new_name": ("STRING", {
+                    "default": "",
+                    "tooltip": "New name = new [tag]. Renames the .wav and its transcript files."
+                }),
+            },
+            "optional": {
+                "overwrite": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Overwrite if a voice with the new name already exists."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("signal",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, voice, new_name, overwrite=False):
+        if voice in ("(none found)", "") or voice is None:
+            return {"ui": {"text": ["[SKIP] no voice selected"]}, "result": (voice or "",)}
+        new_base = _sanitize_name(new_name)
+        if not new_name.strip():
+            return {"ui": {"text": ["[SKIP] enter a new name"]}, "result": (voice,)}
+        if new_base == voice:
+            return {"ui": {"text": [f"[SKIP] name unchanged: {voice}"]}, "result": (voice,)}
+
+        voices = _voices_root()
+        renamed = 0
+        for f in _companion_files(voices, voice):
+            suffix = f[len(voice):]                 # ".wav", ".reference.txt", ".txt", ...
+            dst = os.path.join(voices, new_base + suffix)
+            if os.path.exists(dst):
+                if overwrite:
+                    os.remove(dst)
+                else:
+                    print(f"[Voice Rename] '{new_base}' already exists; skipped (overwrite OFF).")
+                    return {"ui": {"text": [f"[SKIP] {new_base} exists", "Turn overwrite ON."]},
+                            "result": (voice,)}
+            os.rename(os.path.join(voices, f), dst)
+            renamed += 1
+        print(f"[Voice Rename] '{voice}' -> '{new_base}' ({renamed} file(s))")
+        return {"ui": {"text": [f"[RENAMED] {voice} -> {new_base}", f"{renamed} file(s)"]},
+                "result": (new_base,)}
+
+
 NODE_CLASS_MAPPINGS = {
     "VoiceLibrarySaver": VoiceLibrarySaver,
+    "VoiceLibraryDelete": VoiceLibraryDelete,
+    "VoiceLibraryRestore": VoiceLibraryRestore,
+    "VoiceLibraryPurge": VoiceLibraryPurge,
+    "VoiceLibraryRename": VoiceLibraryRename,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibrarySaver": "🎙️ Create Voice Character",
+    "VoiceLibraryDelete": "🗑️ Delete Voice (to trash)",
+    "VoiceLibraryRestore": "♻️ Restore Deleted Voice",
+    "VoiceLibraryPurge": "❌ Purge Trash (permanent)",
+    "VoiceLibraryRename": "✏️ Rename Voice",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

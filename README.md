@@ -65,6 +65,28 @@ suite's own ASR. After the node runs, type `[<voice_name>]` tags in the
 🎤 **TTS Text** node and press **R** in ComfyUI so the voice-folder cache
 refreshes.
 
+## Managing voices
+
+The pack also includes four management nodes (category `audio/TTS Voice Library`).
+Each picks a voice from a **dropdown** (same style as the suite's Character
+Voices node) and outputs a `signal` you can wire into ♻️ **Refresh Voice Cache**
+so the suite updates immediately.
+
+| Node | What it does |
+|------|--------------|
+| 🗑️ **Delete Voice (to trash)** | Moves a voice's files to `models/voice_trash/` — gone from your library but restorable. Needs `confirm` ON. |
+| ♻️ **Restore Deleted Voice** | Moves a voice back from the trash into `models/voices/`. |
+| ❌ **Purge Trash (permanent)** | Erases a voice from the trash forever (or `ALL` to empty it). Needs `confirm` ON — no undo. |
+| ✏️ **Rename Voice** | Renames a voice's `.wav` + transcript files (its `[tag]` changes too). |
+
+Trash lives at `models/voice_trash/` — a sibling of `models/voices/`, so deleted
+voices never show up as usable characters. The dropdowns are read when the graph
+loads; reload the workflow (or press **R**) to see freshly added/removed voices.
+
+Destructive nodes default to `confirm = OFF`, so queuing the management workflow
+does nothing until you flip the switch on the operation you want. To run just one
+operation, **bypass** (Ctrl+B) the groups you're not using.
+
 ## License
 
 MIT
