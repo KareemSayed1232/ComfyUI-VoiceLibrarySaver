@@ -148,18 +148,31 @@ class VoiceLibrarySaver:
             )
         inst = asr_cls()
         func = getattr(inst, getattr(asr_cls, "FUNCTION", "transcribe"))
-        # Mirror the suite ASR node's defaults; only language is exposed on our node.
-        result = func(
-            engine=tts_engine,
-            audio=audio,
-            language=(language or "Auto"),
-            task="transcribe",
-            timestamps="none",
-            diarization=False,
-            chunk_size=30,
-            overlap=2,
-            enable_asr_cache=True,
-        )
+
+        # Only pass arguments the installed suite version actually accepts, so we
+        # don't break across versions (e.g. some versions have no 'diarization').
+        import inspect
+        desired = {
+            "engine": tts_engine,
+            "audio": audio,
+            "language": (language or "Auto"),
+            "task": "transcribe",
+            "timestamps": "none",
+            "diarization": False,
+            "chunk_size": 30,
+            "overlap": 2,
+            "enable_asr_cache": True,
+        }
+        try:
+            params = inspect.signature(func).parameters
+            has_var_kw = any(p.kind == p.VAR_KEYWORD for p in params.values())
+            if not has_var_kw:
+                desired = {k: v for k, v in desired.items() if k in params}
+        except (TypeError, ValueError):
+            # Signature unavailable; fall back to the two guaranteed required args.
+            desired = {"engine": tts_engine, "audio": audio}
+
+        result = func(**desired)
         # transcribe() returns (text, asr_timing_data, info)
         if isinstance(result, (tuple, list)) and result:
             return (result[0] or "").strip()
