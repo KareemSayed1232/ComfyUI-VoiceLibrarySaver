@@ -149,13 +149,18 @@ class VoiceLibrarySaver:
         inst = asr_cls()
         func = getattr(inst, getattr(asr_cls, "FUNCTION", "transcribe"))
 
+        # Guard against a misaligned/garbage language widget (e.g. a stray bool
+        # from an old node layout). Only accept a real, non-empty string.
+        if not isinstance(language, str) or not language.strip():
+            language = "Auto"
+
         # Only pass arguments the installed suite version actually accepts, so we
         # don't break across versions (e.g. some versions have no 'diarization').
         import inspect
         desired = {
             "engine": tts_engine,
             "audio": audio,
-            "language": (language or "Auto"),
+            "language": language,
             "task": "transcribe",
             "timestamps": "none",
             "diarization": False,
