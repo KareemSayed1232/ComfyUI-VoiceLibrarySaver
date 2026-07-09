@@ -424,13 +424,21 @@ class VoiceLibrarySaver:
             text = self._transcribe_with_suite(tts_engine, asr_audio, language)
             source = "ASR"
 
-        # 3) Add a little trailing silence, then save the reference clip.
-        save_wave = waveform
-        if pad_silence and pad_silence > 0:
-            pad = torch.zeros(waveform.shape[0], int(pad_silence * sample_rate),
-                              dtype=waveform.dtype)
-            save_wave = torch.cat([waveform, pad], dim=-1)
-        torchaudio.save(wav_path, save_wave, sample_rate)
+        # 3) Normalize the reference to the format the working (bundled) voices use:
+        #    MONO, 24 kHz, 16-bit PCM. Saving a stereo / high-rate / 32-bit-float clip
+        #    makes Qwen3's codec mis-encode the reference and fall back to echoing it.
+        ref_wave = waveform
+        if ref_wave.shape[0] > 1:                       # downmix to mono
+            ref_wave = ref_wave.mean(dim=0, keepdim=True)
+        save_sr = 24000
+        if sample_rate != save_sr:                      # resample to Qwen3's rate
+            ref_wave = torchaudio.functional.resample(ref_wave, sample_rate, save_sr)
+        if pad_silence and pad_silence > 0:             # trailing silence
+            pad = torch.zeros(ref_wave.shape[0], int(pad_silence * save_sr),
+                              dtype=ref_wave.dtype)
+            ref_wave = torch.cat([ref_wave, pad], dim=-1)
+        ref_wave = (ref_wave.clamp(-1.0, 1.0) * 32767.0).round().to(torch.int16)  # 16-bit PCM
+        torchaudio.save(wav_path, ref_wave, save_sr)
 
         # 4) Write the transcript files that mark this .wav as a usable character.
         with open(ref_path, "w", encoding="utf-8") as f:

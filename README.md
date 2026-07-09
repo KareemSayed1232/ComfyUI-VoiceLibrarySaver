@@ -52,7 +52,10 @@ models/voices/<name>.txt              # same text (metadata slot)
 | `transcript` | text | **Optional.** The exact words spoken in the clip. Leave empty to auto-transcribe. Fill this in if the clone speaks the reference instead of your line. |
 
 The clip is trimmed **before** transcription, so the reference text always matches
-the saved audio exactly.
+the saved audio exactly. The reference is saved as **mono, 24 kHz, 16-bit PCM**
+(the same format the bundled voices use) — saving a stereo / high-sample-rate /
+32-bit-float clip makes Qwen3 mis-encode the reference and echo it instead of
+speaking your line.
 
 > **If a cloned voice speaks the reference clip instead of your line**, the
 > reference transcript doesn't match the audio — Qwen3 then reproduces the
