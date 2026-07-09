@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-voicelibrarysaver"
 description = "One node for TTS-Audio-Suite: give it an audio clip, an ASR engine you already have, and a name; it transcribes the clip with the suite's own ASR (no new model) and saves the .wav + transcript into models/voices, so a [CharacterName] tag resolves to it. Create voice characters entirely inside ComfyUI."
-version = "2.5.0"
+version = "2.6.0"
 license = { text = "MIT" }
 dependencies = []
 

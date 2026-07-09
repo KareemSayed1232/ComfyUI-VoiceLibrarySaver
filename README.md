@@ -47,6 +47,11 @@ models/voices/<name>.txt              # same text (metadata slot)
 | `language` | dropdown | Spoken language for the ASR — `Auto` to detect. |
 | `overwrite` | toggle | On = re-transcribe & rewrite. Off = skip if the voice already exists. |
 | `subfolder` | dropdown | Where to save inside `models/voices` — `(root)` for the top folder. |
+| `max_seconds` | number | Trims the reference to this length (default 12s). **Important:** long reference clips make Qwen3 speak the reference transcript instead of your line — keep this ~10–12s. `0` = no trim. |
+| `pad_silence` | number | Silence (seconds) added to the end of the reference so the last word isn't clipped (default 0.5s). |
+
+The clip is trimmed **before** transcription, so the reference text always matches
+the saved audio exactly (a mismatch degrades cloning).
 
 Outputs `voice_name`, `transcript`, `saved_path`. Wiring:
 

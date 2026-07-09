@@ -256,6 +256,16 @@ class VoiceLibrarySaver:
                     "default": ROOT_LABEL,
                     "tooltip": "Where to save inside models/voices. '(root)' = the top folder."
                 }),
+                "max_seconds": ("FLOAT", {
+                    "default": 12.0, "min": 0.0, "max": 60.0, "step": 0.5,
+                    "tooltip": "Trim the reference to this many seconds before saving. Long clips "
+                               "make Qwen3 speak the reference instead of your line. 0 = no trim."
+                }),
+                "pad_silence": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1,
+                    "tooltip": "Seconds of silence added to the end of the reference to avoid a "
+                               "clipped-last-word artifact. 0 = none."
+                }),
             },
         }
 
@@ -353,7 +363,9 @@ class VoiceLibrarySaver:
 
     # ---- main --------------------------------------------------------------
     def create_voice(self, audio, tts_engine, voice_name,
-                     language="Auto", overwrite=True, subfolder=""):
+                     language="Auto", overwrite=True, subfolder="",
+                     max_seconds=12.0, pad_silence=0.5):
+        import torch
         import torchaudio
 
         # Resolve a lazy audio callable (some older VHS nodes) once, up front.
@@ -382,27 +394,47 @@ class VoiceLibrarySaver:
                         f"[TEXT] {existing[:400]}" if existing else "[TEXT] (existing transcript)"]
             return {"ui": {"text": ui_lines}, "result": (name, existing, wav_path)}
 
-        # 1) save the reference clip at its native sample rate
-        waveform, sample_rate = self._to_waveform_sr(audio)
-        torchaudio.save(wav_path, waveform, sample_rate)
+        waveform, sample_rate = self._to_waveform_sr(audio)  # [C, T] float32
 
-        # 2) transcribe with the suite's own ASR (no new model download)
-        text = self._transcribe_with_suite(tts_engine, audio, language)
+        # 1) Trim an over-long reference. Qwen3 zero-shot cloning "continues" a
+        #    long reference — i.e. it speaks the reference transcript instead of
+        #    your target line. A short (~10s) clip fixes that.
+        full_len = waveform.shape[-1]
+        if max_seconds and max_seconds > 0:
+            max_len = int(max_seconds * sample_rate)
+            if full_len > max_len:
+                waveform = waveform[..., :max_len]
+        trimmed = waveform.shape[-1] < full_len
 
-        # 3) write the transcript files that mark this .wav as a usable character
+        # 2) Transcribe the SAME (trimmed) audio, so the reference text matches
+        #    the reference clip exactly (a mismatch degrades cloning).
+        asr_audio = {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+        text = self._transcribe_with_suite(tts_engine, asr_audio, language)
+
+        # 3) Add a little trailing silence, then save the reference clip.
+        save_wave = waveform
+        if pad_silence and pad_silence > 0:
+            pad = torch.zeros(waveform.shape[0], int(pad_silence * sample_rate),
+                              dtype=waveform.dtype)
+            save_wave = torch.cat([waveform, pad], dim=-1)
+        torchaudio.save(wav_path, save_wave, sample_rate)
+
+        # 4) Write the transcript files that mark this .wav as a usable character.
         with open(ref_path, "w", encoding="utf-8") as f:
             f.write(text)
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(text)
 
-        print(f"[Create Voice Character] saved voice '{name}' -> {wav_path}")
+        dur = waveform.shape[-1] / float(sample_rate) if sample_rate else 0.0
+        print(f"[Create Voice Character] saved voice '{name}' ({dur:.1f}s) -> {wav_path}")
         print(f"[Create Voice Character] transcript: {text or '(empty!)'}")
         if not text:
             print("[Create Voice Character] WARNING: ASR returned empty text. "
                   "Is the clip silent, or is the engine ASR-capable?")
 
-        preview = text if len(text) <= 400 else text[:400] + " …"
-        ui_lines = [f"[OK] {name}  (saved)",
+        preview = text if len(text) <= 300 else text[:300] + " …"
+        note = f"  (trimmed to {dur:.1f}s)" if trimmed else f"  ({dur:.1f}s)"
+        ui_lines = [f"[OK] {name}{note}",
                     f"[TEXT] {preview}" if preview else "[TEXT] (empty - check clip/engine)"]
         return {"ui": {"text": ui_lines}, "result": (name, text, wav_path)}
 
