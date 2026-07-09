@@ -83,6 +83,7 @@ character cache is refreshed too — no manual Refresh node, no pressing R.
 | ⧉ **Duplicate Voice** | Copies a voice to a new name, keeping the original. |
 | 🔎 **Preview Voice** | Outputs a saved voice's `audio` + `transcript` so you can hear/read it (wire `audio` into a Preview Audio node). |
 | 📋 **List Voices** | Prints every saved voice and flags any missing a transcript, plus what's in the trash. |
+| 📦 **Backup / Export Voices** | Zips the whole `models/voices/` folder (optionally the trash too) into `ComfyUI/output/` with a timestamp. |
 
 Trash lives at `models/voice_trash/` — a sibling of `models/voices/`, so deleted
 voices never show up as usable characters.

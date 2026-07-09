@@ -12,6 +12,7 @@ const VOICE_NODES = [
     "VoiceLibraryPreview",
     "VoiceLibraryList",
     "VoiceLibraryDuplicate",
+    "VoiceLibraryBackup",
 ];
 
 function setStatus(node, text) {

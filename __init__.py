@@ -668,6 +668,72 @@ class VoiceLibraryDuplicate:
         return _status(f"✅ Copied '{voice}' → '{new_base}'  ({copied} files).")
 
 
+class VoiceLibraryBackup:
+    """Zip the entire voices folder into ComfyUI/output for backup or export."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "filename_prefix": ("STRING", {
+                    "default": "voices_backup",
+                    "tooltip": "Zip name prefix; a timestamp is added automatically."
+                }),
+            },
+            "optional": {
+                "include_trash": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Also include the deleted voices sitting in the trash."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")  # always make a fresh backup
+
+    def run(self, filename_prefix="voices_backup", include_trash=False):
+        import time
+        import zipfile
+
+        voices = _voices_root()
+        if not os.path.isdir(voices) or not os.listdir(voices):
+            return _status("⚠️ No voices to back up.")
+
+        out_dir = folder_paths.get_output_directory()
+        os.makedirs(out_dir, exist_ok=True)
+        prefix = _sanitize_name(filename_prefix) or "voices_backup"
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        zip_path = os.path.join(out_dir, f"{prefix}_{stamp}.zip")
+
+        def _add_tree(zf, root_dir, top):
+            n = 0
+            for root, _dirs, files in os.walk(root_dir):
+                for f in files:
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, root_dir)
+                    zf.write(full, arcname=os.path.join(top, rel))
+                    n += 1
+            return n
+
+        count = 0
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            count += _add_tree(zf, voices, "voices")
+            if include_trash and os.path.isdir(_trash_root()):
+                count += _add_tree(zf, _trash_root(), "voice_trash")
+
+        size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+        return _status(
+            f"✅ Backed up {count} files  ({size_mb:.1f} MB)\n📦 {os.path.basename(zip_path)}\n📁 {zip_path}"
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     "VoiceLibrarySaver": VoiceLibrarySaver,
     "VoiceLibraryDelete": VoiceLibraryDelete,
@@ -677,6 +743,7 @@ NODE_CLASS_MAPPINGS = {
     "VoiceLibraryPreview": VoiceLibraryPreview,
     "VoiceLibraryList": VoiceLibraryList,
     "VoiceLibraryDuplicate": VoiceLibraryDuplicate,
+    "VoiceLibraryBackup": VoiceLibraryBackup,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibrarySaver": "🎙️ Create Voice Character",
@@ -687,6 +754,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibraryPreview": "🔎 Preview Voice",
     "VoiceLibraryList": "📋 List Voices",
     "VoiceLibraryDuplicate": "⧉ Duplicate Voice",
+    "VoiceLibraryBackup": "📦 Backup / Export Voices",
 }
 
 WEB_DIRECTORY = "./web"
