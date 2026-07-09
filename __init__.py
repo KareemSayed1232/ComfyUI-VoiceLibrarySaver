@@ -144,6 +144,38 @@ def _find_audio_path(directory, base):
     return None
 
 
+def _backup_dirs():
+    """Folders searched for backup zips: ComfyUI output and input."""
+    dirs = []
+    for getter in ("get_output_directory", "get_input_directory"):
+        try:
+            d = getattr(folder_paths, getter)()
+            if d and os.path.isdir(d):
+                dirs.append(d)
+        except Exception:
+            pass
+    return dirs
+
+
+def _list_backup_zips():
+    """Sorted basenames of every .zip in the backup folders (newest first)."""
+    found = {}
+    for d in _backup_dirs():
+        for f in os.listdir(d):
+            if f.lower().endswith(".zip"):
+                found.setdefault(f, os.path.join(d, f))
+    return sorted(found.keys(), key=lambda n: os.path.getmtime(found[n]), reverse=True)
+
+
+def _resolve_backup_zip(name):
+    """Full path of a backup zip picked from the dropdown."""
+    for d in _backup_dirs():
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def _refresh_suite_cache():
     """Poke TTS-Audio-Suite to re-scan its character/voice folders after a change."""
     try:
@@ -734,6 +766,75 @@ class VoiceLibraryBackup:
         )
 
 
+class VoiceLibraryImport:
+    """Restore voices from a backup zip (made by 📦 Backup / Export Voices)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "backup_zip": (_dropdown(_list_backup_zips()), {
+                    "tooltip": "A .zip from ComfyUI's output/ or input/ folder. Newest first."
+                }),
+            },
+            "optional": {
+                "overwrite": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Overwrite voices that already exist with the ones from the zip."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, backup_zip, overwrite=False):
+        import zipfile
+
+        if backup_zip in ("(none found)", "") or backup_zip is None:
+            return _status("⚠️ No backup zip found in output/ or input/.")
+        path = _resolve_backup_zip(backup_zip)
+        if path is None:
+            return _status(f"⚠️ Could not find '{backup_zip}'.")
+
+        dest_roots = {"voices": _voices_root(), "voice_trash": _trash_root()}
+        extracted = skipped = 0
+        try:
+            with zipfile.ZipFile(path) as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    name = info.filename.replace("\\", "/")
+                    parts = [p for p in name.split("/") if p not in ("", ".", "..")]
+                    if not parts:
+                        continue
+                    if parts[0] in dest_roots and len(parts) > 1:
+                        base_dir, rel = dest_roots[parts[0]], os.path.join(*parts[1:])
+                    else:
+                        base_dir, rel = _voices_root(), os.path.join(*parts)
+
+                    target = os.path.normpath(os.path.join(base_dir, rel))
+                    if not target.startswith(os.path.normpath(base_dir) + os.sep):
+                        continue  # guard against zip-slip paths
+                    if os.path.exists(target) and not overwrite:
+                        skipped += 1
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with zf.open(info) as src, open(target, "wb") as out:
+                        import shutil
+                        shutil.copyfileobj(src, out)
+                    extracted += 1
+        except zipfile.BadZipFile:
+            return _status(f"⚠️ '{backup_zip}' is not a valid zip.")
+
+        _refresh_suite_cache()
+        tail = f"  (skipped {skipped} existing — turn overwrite ON to replace)" if skipped else ""
+        return _status(f"✅ Imported {extracted} files from '{backup_zip}'.{tail}")
+
+
 NODE_CLASS_MAPPINGS = {
     "VoiceLibrarySaver": VoiceLibrarySaver,
     "VoiceLibraryDelete": VoiceLibraryDelete,
@@ -744,6 +845,7 @@ NODE_CLASS_MAPPINGS = {
     "VoiceLibraryList": VoiceLibraryList,
     "VoiceLibraryDuplicate": VoiceLibraryDuplicate,
     "VoiceLibraryBackup": VoiceLibraryBackup,
+    "VoiceLibraryImport": VoiceLibraryImport,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibrarySaver": "🎙️ Create Voice Character",
@@ -755,6 +857,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibraryList": "📋 List Voices",
     "VoiceLibraryDuplicate": "⧉ Duplicate Voice",
     "VoiceLibraryBackup": "📦 Backup / Export Voices",
+    "VoiceLibraryImport": "📥 Import / Restore Backup",
 }
 
 WEB_DIRECTORY = "./web"
