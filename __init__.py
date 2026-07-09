@@ -117,6 +117,56 @@ def _dropdown(names):
     return names or ["(none found)"]
 
 
+def _status(message):
+    """Standard return for management nodes: show text on the node AND output it."""
+    print(f"[Voice Library] {message}")
+    return {"ui": {"text": [message]}, "result": (message,)}
+
+
+def _read_transcript(directory, base):
+    """Return a voice's transcript text (.reference.txt preferred, then .txt)."""
+    for ext in (".reference.txt", ".txt"):
+        p = os.path.join(directory, base + ext)
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except OSError:
+                pass
+    return ""
+
+
+def _find_audio_path(directory, base):
+    """Path to a voice's audio file, or None."""
+    for f in _companion_files(directory, base):
+        if os.path.splitext(f)[1].lower() in AUDIO_EXTS:
+            return os.path.join(directory, f)
+    return None
+
+
+def _refresh_suite_cache():
+    """Poke TTS-Audio-Suite to re-scan its character/voice folders after a change."""
+    try:
+        import nodes
+        cls = None
+        for c in nodes.NODE_CLASS_MAPPINGS.values():
+            if getattr(c, "__name__", "") == "RefreshVoiceCacheNode":
+                cls = c
+                break
+        if cls is None:
+            return
+        inst = cls()
+        func = getattr(inst, getattr(cls, "FUNCTION", "refresh"))
+        import inspect
+        desired = {"signal": "voice_library_op", "signal2": None, "force_refresh": True}
+        params = inspect.signature(func).parameters
+        if not any(p.kind == p.VAR_KEYWORD for p in params.values()):
+            desired = {k: v for k, v in desired.items() if k in params}
+        func(**desired)
+    except Exception as e:
+        print(f"[Voice Library] suite cache refresh skipped: {e}")
+
+
 # Languages the suite's Qwen3 ASR accepts, plus "Auto" for auto-detect.
 LANGUAGES = ["Auto", "English", "Arabic", "Chinese", "Cantonese", "German", "French",
              "Spanish", "Portuguese", "Indonesian", "Italian", "Korean", "Russian",
@@ -344,22 +394,21 @@ class VoiceLibraryDelete:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("signal",)
+    RETURN_NAMES = ("status",)
     FUNCTION = "run"
     OUTPUT_NODE = True
     CATEGORY = "audio/TTS Voice Library"
 
     def run(self, voice, confirm):
         if voice in ("(none found)", "") or voice is None:
-            return {"ui": {"text": ["[SKIP] no voice selected"]}, "result": (voice or "",)}
+            return _status("⚠️ No voice selected.")
         if not confirm:
-            print(f"[Voice Delete] '{voice}' NOT deleted (confirm is OFF).")
-            return {"ui": {"text": [f"[SKIP] {voice}", "Turn 'confirm' ON to delete."]},
-                    "result": (voice,)}
+            return _status(f"⚠️ '{voice}' NOT deleted — turn the confirm switch ON.")
         moved = _move_voice(_voices_root(), _trash_root(), voice, overwrite=True)
-        print(f"[Voice Delete] moved '{voice}' to trash: {moved}")
-        return {"ui": {"text": [f"[DELETED] {voice} -> trash", f"{len(moved)} file(s)"]},
-                "result": (voice,)}
+        if not moved:
+            return _status(f"⚠️ '{voice}' not found — nothing to delete.")
+        _refresh_suite_cache()
+        return _status(f"✅ Deleted '{voice}' → trash  ({len(moved)} files).")
 
 
 class VoiceLibraryRestore:
@@ -377,18 +426,19 @@ class VoiceLibraryRestore:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("signal",)
+    RETURN_NAMES = ("status",)
     FUNCTION = "run"
     OUTPUT_NODE = True
     CATEGORY = "audio/TTS Voice Library"
 
     def run(self, voice):
         if voice in ("(none found)", "") or voice is None:
-            return {"ui": {"text": ["[SKIP] nothing in trash"]}, "result": (voice or "",)}
+            return _status("⚠️ Nothing in the trash to restore.")
         moved = _move_voice(_trash_root(), _voices_root(), voice, overwrite=True)
-        print(f"[Voice Restore] restored '{voice}' from trash: {moved}")
-        return {"ui": {"text": [f"[RESTORED] {voice}", f"{len(moved)} file(s)"]},
-                "result": (voice,)}
+        if not moved:
+            return _status(f"⚠️ '{voice}' not found in trash.")
+        _refresh_suite_cache()
+        return _status(f"✅ Restored '{voice}' → voices  ({len(moved)} files).")
 
 
 class VoiceLibraryPurge:
@@ -409,16 +459,14 @@ class VoiceLibraryPurge:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("signal",)
+    RETURN_NAMES = ("status",)
     FUNCTION = "run"
     OUTPUT_NODE = True
     CATEGORY = "audio/TTS Voice Library"
 
     def run(self, voice, confirm):
         if not confirm:
-            print(f"[Voice Purge] '{voice}' NOT purged (confirm is OFF).")
-            return {"ui": {"text": [f"[SKIP] {voice}", "Turn 'confirm' ON to purge."]},
-                    "result": (voice,)}
+            return _status(f"⚠️ '{voice}' NOT purged — turn the confirm switch ON.")
         trash = _trash_root()
         targets = _list_voice_names(trash) if voice == PURGE_ALL else [voice]
         removed = 0
@@ -429,9 +477,10 @@ class VoiceLibraryPurge:
                     removed += 1
                 except OSError:
                     pass
-        print(f"[Voice Purge] permanently removed {removed} file(s) for {targets}")
-        return {"ui": {"text": [f"[PURGED] {voice}", f"{removed} file(s) erased"]},
-                "result": (voice,)}
+        if not removed:
+            return _status("⚠️ Trash is already empty — nothing to purge.")
+        label = "ALL trash" if voice == PURGE_ALL else f"'{voice}'"
+        return _status(f"✅ Purged {label} forever  ({removed} files erased).")
 
 
 class VoiceLibraryRename:
@@ -458,19 +507,19 @@ class VoiceLibraryRename:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("signal",)
+    RETURN_NAMES = ("status",)
     FUNCTION = "run"
     OUTPUT_NODE = True
     CATEGORY = "audio/TTS Voice Library"
 
     def run(self, voice, new_name, overwrite=False):
         if voice in ("(none found)", "") or voice is None:
-            return {"ui": {"text": ["[SKIP] no voice selected"]}, "result": (voice or "",)}
-        new_base = _sanitize_name(new_name)
+            return _status("⚠️ No voice selected.")
         if not new_name.strip():
-            return {"ui": {"text": ["[SKIP] enter a new name"]}, "result": (voice,)}
+            return _status("⚠️ Type a new name first.")
+        new_base = _sanitize_name(new_name)
         if new_base == voice:
-            return {"ui": {"text": [f"[SKIP] name unchanged: {voice}"]}, "result": (voice,)}
+            return _status(f"⚠️ Name unchanged: '{voice}'.")
 
         voices = _voices_root()
         renamed = 0
@@ -481,14 +530,142 @@ class VoiceLibraryRename:
                 if overwrite:
                     os.remove(dst)
                 else:
-                    print(f"[Voice Rename] '{new_base}' already exists; skipped (overwrite OFF).")
-                    return {"ui": {"text": [f"[SKIP] {new_base} exists", "Turn overwrite ON."]},
-                            "result": (voice,)}
+                    return _status(f"⚠️ '{new_base}' already exists — turn overwrite ON.")
             os.rename(os.path.join(voices, f), dst)
             renamed += 1
-        print(f"[Voice Rename] '{voice}' -> '{new_base}' ({renamed} file(s))")
-        return {"ui": {"text": [f"[RENAMED] {voice} -> {new_base}", f"{renamed} file(s)"]},
-                "result": (new_base,)}
+        if not renamed:
+            return _status(f"⚠️ '{voice}' not found — nothing to rename.")
+        _refresh_suite_cache()
+        return _status(f"✅ Renamed '{voice}' → '{new_base}'  ({renamed} files).")
+
+
+class VoiceLibraryPreview:
+    """Load a saved voice's clip + transcript so you can hear/read it before editing."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "voice": (_dropdown(_list_voice_names(_voices_root())), {
+                    "tooltip": "Pick a saved voice. Wire 'audio' into a Preview Audio node to hear it."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("AUDIO", "STRING", "STRING")
+    RETURN_NAMES = ("audio", "transcript", "status")
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, voice):
+        import torch
+        import torchaudio
+        voices = _voices_root()
+        silence = {"waveform": torch.zeros(1, 1, 1), "sample_rate": 24000}
+
+        if voice in ("(none found)", "") or voice is None:
+            return {"ui": {"text": ["⚠️ No voice selected."]},
+                    "result": (silence, "", "⚠️ No voice selected.")}
+        path = _find_audio_path(voices, voice)
+        if path is None:
+            msg = f"⚠️ '{voice}' has no audio file."
+            return {"ui": {"text": [msg]}, "result": (silence, "", msg)}
+
+        waveform, sr = torchaudio.load(path)
+        audio = {"waveform": waveform.unsqueeze(0), "sample_rate": int(sr)}
+        text = _read_transcript(voices, voice)
+        dur = waveform.shape[-1] / float(sr) if sr else 0.0
+        preview = text[:80] + (" …" if len(text) > 80 else "")
+        msg = f"✅ {voice}  ({dur:.1f}s)\n📝 {preview if text else '(no transcript!)'}"
+        return {"ui": {"text": [msg]}, "result": (audio, text, msg)}
+
+
+class VoiceLibraryList:
+    """Show every saved voice, flagging any that are missing a transcript."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")  # always re-run so the list is never stale
+
+    def run(self):
+        voices = _voices_root()
+        names = _list_voice_names(voices)
+        trash = _list_voice_names(_trash_root())
+        lines = [f"📋 {len(names)} voice(s)   |   🗑️ {len(trash)} in trash"]
+        for n in names:
+            ok = bool(_read_transcript(voices, n))
+            lines.append(f"  {'✅' if ok else '⚠️ (no transcript)'}  {n}")
+        if trash:
+            lines.append("— trash —")
+            lines.extend(f"  🗑️ {n}" for n in trash)
+        msg = "\n".join(lines)
+        print(f"[Voice Library] {msg}")
+        return {"ui": {"text": [msg]}, "result": (msg,)}
+
+
+class VoiceLibraryDuplicate:
+    """Copy a voice to a new name, keeping the original."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "voice": (_dropdown(_list_voice_names(_voices_root())), {
+                    "tooltip": "The voice to copy."
+                }),
+                "new_name": ("STRING", {
+                    "default": "",
+                    "tooltip": "Name of the copy = its new [tag]."
+                }),
+            },
+            "optional": {
+                "overwrite": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Overwrite if a voice with the new name already exists."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    CATEGORY = "audio/TTS Voice Library"
+
+    def run(self, voice, new_name, overwrite=False):
+        import shutil
+        if voice in ("(none found)", "") or voice is None:
+            return _status("⚠️ No voice selected.")
+        if not new_name.strip():
+            return _status("⚠️ Type a name for the copy.")
+        new_base = _sanitize_name(new_name)
+        if new_base == voice:
+            return _status("⚠️ The copy needs a different name.")
+
+        voices = _voices_root()
+        copied = 0
+        for f in _companion_files(voices, voice):
+            suffix = f[len(voice):]
+            dst = os.path.join(voices, new_base + suffix)
+            if os.path.exists(dst) and not overwrite:
+                return _status(f"⚠️ '{new_base}' already exists — turn overwrite ON.")
+            shutil.copy2(os.path.join(voices, f), dst)
+            copied += 1
+        if not copied:
+            return _status(f"⚠️ '{voice}' not found — nothing to copy.")
+        _refresh_suite_cache()
+        return _status(f"✅ Copied '{voice}' → '{new_base}'  ({copied} files).")
 
 
 NODE_CLASS_MAPPINGS = {
@@ -497,6 +674,9 @@ NODE_CLASS_MAPPINGS = {
     "VoiceLibraryRestore": VoiceLibraryRestore,
     "VoiceLibraryPurge": VoiceLibraryPurge,
     "VoiceLibraryRename": VoiceLibraryRename,
+    "VoiceLibraryPreview": VoiceLibraryPreview,
+    "VoiceLibraryList": VoiceLibraryList,
+    "VoiceLibraryDuplicate": VoiceLibraryDuplicate,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibrarySaver": "🎙️ Create Voice Character",
@@ -504,6 +684,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VoiceLibraryRestore": "♻️ Restore Deleted Voice",
     "VoiceLibraryPurge": "❌ Purge Trash (permanent)",
     "VoiceLibraryRename": "✏️ Rename Voice",
+    "VoiceLibraryPreview": "🔎 Preview Voice",
+    "VoiceLibraryList": "📋 List Voices",
+    "VoiceLibraryDuplicate": "⧉ Duplicate Voice",
 }
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+WEB_DIRECTORY = "./web"
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

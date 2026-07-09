@@ -69,8 +69,10 @@ refreshes.
 
 The pack also includes four management nodes (category `audio/TTS Voice Library`).
 Each picks a voice from a **dropdown** (same style as the suite's Character
-Voices node) and outputs a `signal` you can wire into ♻️ **Refresh Voice Cache**
-so the suite updates immediately.
+Voices node), shows a plain-English **status line right on the node** after it
+runs, and outputs that same `status` string. **After every operation the voice
+dropdowns refresh automatically** (across the whole graph) and the suite's own
+character cache is refreshed too — no manual Refresh node, no pressing R.
 
 | Node | What it does |
 |------|--------------|
@@ -78,10 +80,12 @@ so the suite updates immediately.
 | ♻️ **Restore Deleted Voice** | Moves a voice back from the trash into `models/voices/`. |
 | ❌ **Purge Trash (permanent)** | Erases a voice from the trash forever (or `ALL` to empty it). Needs `confirm` ON — no undo. |
 | ✏️ **Rename Voice** | Renames a voice's `.wav` + transcript files (its `[tag]` changes too). |
+| ⧉ **Duplicate Voice** | Copies a voice to a new name, keeping the original. |
+| 🔎 **Preview Voice** | Outputs a saved voice's `audio` + `transcript` so you can hear/read it (wire `audio` into a Preview Audio node). |
+| 📋 **List Voices** | Prints every saved voice and flags any missing a transcript, plus what's in the trash. |
 
 Trash lives at `models/voice_trash/` — a sibling of `models/voices/`, so deleted
-voices never show up as usable characters. The dropdowns are read when the graph
-loads; reload the workflow (or press **R**) to see freshly added/removed voices.
+voices never show up as usable characters.
 
 Destructive nodes default to `confirm = OFF`, so queuing the management workflow
 does nothing until you flip the switch on the operation you want. To run just one
