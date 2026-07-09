@@ -266,6 +266,13 @@ class VoiceLibrarySaver:
                     "tooltip": "Seconds of silence added to the end of the reference to avoid a "
                                "clipped-last-word artifact. 0 = none."
                 }),
+                "transcript": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": "Optional. The EXACT words spoken in the clip. Leave empty to "
+                               "auto-transcribe. Fill this in if the clone speaks the reference "
+                               "instead of your line — that means the auto transcript didn't match "
+                               "the audio, and cloning needs an exact match."
+                }),
             },
         }
 
@@ -364,7 +371,7 @@ class VoiceLibrarySaver:
     # ---- main --------------------------------------------------------------
     def create_voice(self, audio, tts_engine, voice_name,
                      language="Auto", overwrite=True, subfolder="",
-                     max_seconds=12.0, pad_silence=0.5):
+                     max_seconds=12.0, pad_silence=0.5, transcript=""):
         import torch
         import torchaudio
 
@@ -406,10 +413,16 @@ class VoiceLibrarySaver:
                 waveform = waveform[..., :max_len]
         trimmed = waveform.shape[-1] < full_len
 
-        # 2) Transcribe the SAME (trimmed) audio, so the reference text matches
-        #    the reference clip exactly (a mismatch degrades cloning).
-        asr_audio = {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
-        text = self._transcribe_with_suite(tts_engine, asr_audio, language)
+        # 2) Reference text. Use the manual override if given (guarantees an exact
+        #    match); otherwise transcribe the SAME (trimmed) audio. A reference text
+        #    that doesn't match the clip makes Qwen3 speak the reference, not your line.
+        if transcript and transcript.strip():
+            text = transcript.strip()
+            source = "manual"
+        else:
+            asr_audio = {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
+            text = self._transcribe_with_suite(tts_engine, asr_audio, language)
+            source = "ASR"
 
         # 3) Add a little trailing silence, then save the reference clip.
         save_wave = waveform
@@ -426,16 +439,16 @@ class VoiceLibrarySaver:
             f.write(text)
 
         dur = waveform.shape[-1] / float(sample_rate) if sample_rate else 0.0
-        print(f"[Create Voice Character] saved voice '{name}' ({dur:.1f}s) -> {wav_path}")
+        print(f"[Create Voice Character] saved voice '{name}' ({dur:.1f}s, {source} text) -> {wav_path}")
         print(f"[Create Voice Character] transcript: {text or '(empty!)'}")
         if not text:
-            print("[Create Voice Character] WARNING: ASR returned empty text. "
-                  "Is the clip silent, or is the engine ASR-capable?")
+            print("[Create Voice Character] WARNING: empty transcript. "
+                  "Type the spoken words into 'transcript', or check the ASR engine.")
 
         preview = text if len(text) <= 300 else text[:300] + " …"
         note = f"  (trimmed to {dur:.1f}s)" if trimmed else f"  ({dur:.1f}s)"
-        ui_lines = [f"[OK] {name}{note}",
-                    f"[TEXT] {preview}" if preview else "[TEXT] (empty - check clip/engine)"]
+        ui_lines = [f"[OK] {name}{note}  [{source} transcript]",
+                    f"[TEXT] {preview}" if preview else "[TEXT] (EMPTY — fill in 'transcript')"]
         return {"ui": {"text": ui_lines}, "result": (name, text, wav_path)}
 
 

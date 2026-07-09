@@ -49,9 +49,18 @@ models/voices/<name>.txt              # same text (metadata slot)
 | `subfolder` | dropdown | Where to save inside `models/voices` — `(root)` for the top folder. |
 | `max_seconds` | number | Trims the reference to this length (default 12s). **Important:** long reference clips make Qwen3 speak the reference transcript instead of your line — keep this ~10–12s. `0` = no trim. |
 | `pad_silence` | number | Silence (seconds) added to the end of the reference so the last word isn't clipped (default 0.5s). |
+| `transcript` | text | **Optional.** The exact words spoken in the clip. Leave empty to auto-transcribe. Fill this in if the clone speaks the reference instead of your line. |
 
 The clip is trimmed **before** transcription, so the reference text always matches
-the saved audio exactly (a mismatch degrades cloning).
+the saved audio exactly.
+
+> **If a cloned voice speaks the reference clip instead of your line**, the
+> reference transcript doesn't match the audio — Qwen3 then reproduces the
+> reference. Fixes, in order: (1) type the exact spoken words into `transcript`;
+> (2) set `language` to the clip's real language instead of `Auto`; (3) use a
+> short, clean, single-speaker reference clip; (4) as a fallback, turn on
+> `x_vector_only_mode` on the Qwen3 engine (speaker-embedding cloning that ignores
+> the transcript entirely).
 
 Outputs `voice_name`, `transcript`, `saved_path`. Wiring:
 
